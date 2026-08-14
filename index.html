@@ -1232,11 +1232,12 @@ function App() {
     const newHistorial = pendingImport.historial || [];
     const newMeta = pendingImport.meta || { lastR1: null, lastR2: null };
     setR1Base(newR1); setR2Base(newR2); setHistorial(newHistorial); setMeta(newMeta);
-    await storageSet({ r1Base: newR1, r2Base: newR2, historial: newHistorial, meta: newMeta });
-    setAlertBanner({ message: `Copia de seguridad restaurada (exportada el ${pendingImport.exportedAt ? pendingImport.exportedAt.slice(0,10) : "?"}): ${Object.keys(newR1).length} tareas de Reporte 1, ${Object.keys(newR2).length} de Reporte 2, ${newHistorial.length} eventos en el historial.` });
-    setShowImportConfirm(false);
-    setPendingImport(null);
-  };
+const ok = await storageSet({ r1Base: newR1, r2Base: newR2, historial: newHistorial, meta: newMeta });
+    if (ok) {
+      setAlertBanner({ message: `Copia de seguridad restaurada y guardada en GitHub (exportada el ${pendingImport.exportedAt ? pendingImport.exportedAt.slice(0,10) : "?"}): ${Object.keys(newR1).length} tareas de Reporte 1, ${Object.keys(newR2).length} de Reporte 2, ${newHistorial.length} eventos en el historial.` });
+    } else {
+      setError("Se restauró la copia en pantalla, pero NO se pudo guardar en GitHub (revisá el token/configuración). Si recargás la página ahora, se va a perder.");
+    }   
 
   const exportExcel = async () => {
     const cambiosRows = cambiosCtl.processed.map((h) => ({ Fecha: h.fecha, Código: h.codigo, Proyecto: h.proyecto, Reporte: h.reporte, Tipo: h.tipo, Campo: h.campo, "Valor anterior": h.anterior, "Valor nuevo": h.nuevo }));
