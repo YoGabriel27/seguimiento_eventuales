@@ -96,86 +96,60 @@ const IconArrowDown = (p) => <Icon {...p}><path d="M12 5v14" /><path d="M18 13l-
 const IconChevronsUpDown = (p) => <Icon {...p}><path d="M8 9l4-4 4 4" /><path d="M8 15l4 4 4-4" /></Icon>;
 
 /* ---------------------------------------------------------
-   ⚠️ CONFIGURACIÓN DE GITHUB — COMPLETAR ANTES DE PUBLICAR ⚠️
+   ⚠️ CONFIGURACIÓN — COMPLETAR ANTES DE PUBLICAR ⚠️
    Esta app guarda los datos compartidos en archivos JSON dentro
-   de un repositorio de GitHub, usando la API de Contenidos.
+   de un repositorio de GitHub, pero NUNCA habla con la API de
+   GitHub directamente ni conoce ningún token: le pide todo a un
+   Worker intermediario (Cloudflare Workers) que es el único que
+   guarda el token de GitHub, como "secret" del lado del servidor.
 
-   Completá estos 3 valores con los tuyos:
-   - GH_OWNER: tu usuario (o el de la organización) de GitHub
-   - GH_REPO:  el nombre del repositorio donde vive esta página
-   - GH_TOKEN: un token de acceso "fine-grained" limitado SOLO
-               a este repositorio, con permiso "Contents:
-               Read and write". Generalo en:
-               https://github.com/settings/personal-access-tokens/new
-
-   IMPORTANTE: este token queda visible en el código fuente de
-   la página para cualquiera que la abra. Por eso debe estar
-   limitado únicamente a este repositorio (no uses un token con
-   acceso a otras cosas), y el repositorio debe considerarse
-   público (los archivos de datos son accesibles por su URL,
-   aunque no se muestren dentro de la app).
+   Completá estos 2 valores después de desplegar el Worker
+   (instrucciones en worker/README.md):
+   - WORKER_URL: la URL pública de tu Worker
+                 (ej: "https://seguimiento-eventuales-proxy.tuusuario.workers.dev")
+   - APP_SECRET: la misma contraseña que configuraste como
+                 "APP_SECRET" en el Worker. Sirve solo para que no
+                 cualquiera que encuentre la URL del Worker pueda
+                 escribir datos; no reemplaza la protección real,
+                 que es que el token de GitHub ya no viaja al navegador.
 --------------------------------------------------------- */
-const GH_OWNER = "YoGabriel27";
-const GH_REPO = "seguimiento_eventuales";
-const GH_BRANCH = "main";
-const GH_TOKEN = "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";
+const WORKER_URL = "https://shrill-sun-41fa.cg-c5b.workers.dev";
+const APP_SECRET = "desarrollo2026";
+
 const GH_R1_PATH = "data/r1base.json";
 const GH_R2_PATH = "data/r2base.json";
 const GH_HIST_PATH = "data/historial.json";
 const HISTORIAL_MAX = 3000;
 const GH_CONSULTAS_PATH = "data/consultas.json";
-const GH_API = "https://api.github.com";
 
 const ROLE_KEY = "rol_actual_v1"; // personal (guardado en este navegador, no compartido)
 
-function b64EncodeUnicode(str) {
-  return btoa(unescape(encodeURIComponent(str)));
-}
-function b64DecodeUnicode(str) {
-  return decodeURIComponent(escape(atob(str)));
-}
-
-/* Lee un archivo JSON del repositorio. Si todavía no existe, devuelve null sin error. */
+/* Lee un archivo JSON (vía el Worker). Si todavía no existe, devuelve null sin error. */
 async function ghGetFile(path) {
   try {
-    const res = await fetch(`${GH_API}/repos/${GH_OWNER}/${GH_REPO}/contents/${path}?ref=${GH_BRANCH}&_=${Date.now()}`, {
-      headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" },
-    });
-    if (res.status === 404) return { content: null, sha: null };
-    if (!res.ok) throw new Error(`GitHub GET ${path}: ${res.status}`);
+    const res = await fetch(`${WORKER_URL}/file?path=${encodeURIComponent(path)}&_=${Date.now()}`);
+    if (!res.ok) throw new Error(`Worker GET ${path}: ${res.status}`);
     const data = await res.json();
-    const text = b64DecodeUnicode((data.content || "").replace(/\n/g, ""));
-    return { content: text ? JSON.parse(text) : null, sha: data.sha };
+    if (data.error) throw new Error(data.error);
+    return { content: data.content, sha: data.sha };
   } catch (e) {
     console.error("ghGetFile", e);
     return { content: null, sha: null, error: true };
   }
 }
 
-/* Escribe (crea o actualiza) un archivo JSON en el repositorio.
-   Reintenta una vez si hubo conflicto de versión (otra persona escribió al mismo tiempo). */
-async function ghPutFile(path, obj, message, retry = true) {
+/* Escribe (crea o actualiza) un archivo JSON (vía el Worker).
+   El Worker se encarga de reintentar si hubo conflicto de versión. */
+async function ghPutFile(path, obj, message) {
   try {
-    const current = await ghGetFile(path);
-    const body = {
-      message: message || `Actualiza ${path}`,
-      content: b64EncodeUnicode(JSON.stringify(obj, null, 2)),
-      branch: GH_BRANCH,
-    };
-    if (current.sha) body.sha = current.sha;
-    const res = await fetch(`${GH_API}/repos/${GH_OWNER}/${GH_REPO}/contents/${path}`, {
+    const res = await fetch(`${WORKER_URL}/file`, {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${GH_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json", "X-App-Secret": APP_SECRET },
+      body: JSON.stringify({ path, obj, message }),
     });
-    if (res.status === 409 && retry) {
-      return await ghPutFile(path, obj, message, false);
-    }
-    return res.ok;
+    if (!res.ok) return false;
+    const data = await res.json();
+    return !!data.ok;
   } catch (e) {
     console.error("ghPutFile", e);
     return false;
