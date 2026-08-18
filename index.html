@@ -19,6 +19,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -113,79 +114,58 @@ const IconChevronsUpDown = (p) => <Icon {...p}><path d="M8 9l4-4 4 4" /><path d=
                  escribir datos; no reemplaza la protección real,
                  que es que el token de GitHub ya no viaja al navegador.
 --------------------------------------------------------- */
-const WORKER_URL = "https://shrill-sun-41fa.cg-c5b.workers.dev";
-const APP_SECRET = "desarrollo2026";
+const SUPABASE_URL = "https://zewgswnatkthgzqahdeq.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpld2dzd25hdGt0aGd6cWFoZGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwNzE1NjcsImV4cCI6MjEwMjY0NzU2N30.U1P9eE4hGefV9h-dAy98-cw5p98ktFOnIPvfoghvcjc";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const GH_R1_PATH = "data/r1base.json";
-const GH_R2_PATH = "data/r2base.json";
-const GH_HIST_PATH = "data/historial.json";
+const STATE_KEY = "estado_compartido";
+const CONSULTAS_KEY = "consultas";
 const HISTORIAL_MAX = 3000;
-const GH_CONSULTAS_PATH = "data/consultas.json";
 
 const ROLE_KEY = "rol_actual_v1"; // personal (guardado en este navegador, no compartido)
 
-/* Lee un archivo JSON (vía el Worker). Si todavía no existe, devuelve null sin error. */
-async function ghGetFile(path) {
-  try {
-    const res = await fetch(`${WORKER_URL}/file?path=${encodeURIComponent(path)}&_=${Date.now()}`);
-    if (!res.ok) throw new Error(`Worker GET ${path}: ${res.status}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return { content: data.content, sha: data.sha };
-  } catch (e) {
-    console.error("ghGetFile", e);
-    return { content: null, sha: null, error: true };
-  }
-}
-
-/* Escribe (crea o actualiza) un archivo JSON (vía el Worker).
-   El Worker se encarga de reintentar si hubo conflicto de versión. */
-async function ghPutFile(path, obj, message) {
-  try {
-    const res = await fetch(`${WORKER_URL}/file`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", "X-App-Secret": APP_SECRET },
-      body: JSON.stringify({ path, obj, message }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return !!data.ok;
-  } catch (e) {
-    console.error("ghPutFile", e);
-    return false;
-  }
-}
-
 async function storageGet() {
-  const [r1, r2, hist] = await Promise.all([
-    ghGetFile(GH_R1_PATH),
-    ghGetFile(GH_R2_PATH),
-    ghGetFile(GH_HIST_PATH),
-  ]);
-  if (!r1.content && !r2.content && !hist.content) return null;
+  const { data, error } = await supabaseClient
+    .from("app_state").select("data").eq("key", STATE_KEY).maybeSingle();
+  if (error || !data) return null;
+  const state = data.data || {};
   return {
-    r1Base: r1.content || {},
-    r2Base: r2.content || {},
-    historial: (hist.content && hist.content.historial) || [],
-    meta: (hist.content && hist.content.meta) || { lastR1: null, lastR2: null },
+    r1Base: state.r1Base || {},
+    r2Base: state.r2Base || {},
+    historial: state.historial || [],
+    meta: state.meta || { lastR1: null, lastR2: null },
   };
 }
+
 async function storageSet(state) {
   const historialRecortado = (state.historial || []).slice(0, HISTORIAL_MAX);
-  const results = await Promise.all([
-    ghPutFile(GH_R1_PATH, state.r1Base || {}, "Actualiza base Reporte 1"),
-    ghPutFile(GH_R2_PATH, state.r2Base || {}, "Actualiza base Reporte 2"),
-    ghPutFile(GH_HIST_PATH, { historial: historialRecortado, meta: state.meta || {} }, "Actualiza historial"),
-  ]);
-  return results.every(Boolean);
+  const payload = {
+    r1Base: state.r1Base || {},
+    r2Base: state.r2Base || {},
+    historial: historialRecortado,
+    meta: state.meta || {},
+  };
+  const { error } = await supabaseClient
+    .from("app_state")
+    .upsert({ key: STATE_KEY, data: payload, updated_at: new Date().toISOString() });
+  if (error) console.error("storageSet", error);
+  return !error;
 }
 
 async function consultasGet() {
-  const { content } = await ghGetFile(GH_CONSULTAS_PATH);
-  return content || [];
+  const { data, error } = await supabaseClient
+    .from("app_state").select("data").eq("key", CONSULTAS_KEY).maybeSingle();
+  if (error || !data) return [];
+  return data.data || [];
 }
+
 async function consultasSet(list) {
-  return await ghPutFile(GH_CONSULTAS_PATH, list, "Actualiza consultas");
+  const { error } = await supabaseClient
+    .from("app_state")
+    .upsert({ key: CONSULTAS_KEY, data: list, updated_at: new Date().toISOString() });
+  if (error) console.error("consultasSet", error);
+  return !error;
+}
 }
 
 /* El rol elegido se guarda localmente en este navegador/dispositivo (no es compartido). */
